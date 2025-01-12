@@ -143,8 +143,8 @@ topdecs:
 
 topdec:
     accmod dec semi_opt                                           { GlobalDeclaration ($1, $2) }
-  | STRUCT NAME LPAR params RPAR semi_opt                  { Struct ($2, [], $4) }
-  | STRUCT NAME LT type_vars GT LPAR params RPAR semi_opt   { Struct ($2, $4, $7) }
+  | STRUCT NAME LPAR struct_params RPAR semi_opt                  { Struct ($2, [], $4) }
+  | STRUCT NAME LT type_vars GT LPAR struct_params RPAR semi_opt   { Struct ($2, $4, $7) }
   | REFERENCE PATH AS NAME semi_opt                               { FileReference($4, $2) }
 ;
 
@@ -197,8 +197,10 @@ arg_types:
   seperated_or_empty(COMMA,arg_type) {$1}
 ;
 arg_type:
-  | typ                           { (Open, $1) }  
-  | varmod typ                    { ($1, $2) }
+  | typ                           { (Open, Some $1) }
+  | UNDERSCORE                    { (Open, None) }
+  | varmod typ                    { ($1, Some $2) }
+  | varmod UNDERSCORE             { ($1, None) }
 ;
 
 block:
@@ -255,8 +257,8 @@ simple_value:
 value:
     simple_value { $1 }
   | expression_not_ternary binop expression_not_ternary { Binary_op ($2, $1, $3) }
-  | LPAR params RPAR block                    { AnonRoutine ([], $2, $4) }
-  | LT seperated(COMMA,TYPE_VAR) GT LPAR params RPAR block     { AnonRoutine ($2, $5, $7) }
+  | LPAR routine_params RPAR stmt                       { AnonRoutine ([], $2, $4) }
+  | LT seperated(COMMA,TYPE_VAR) GT LPAR routine_params RPAR stmt     { AnonRoutine ($2, $5, $7) }
 ;
 
 %inline binop:
@@ -365,10 +367,20 @@ non_control_flow_stmt:
 ;
 
 
-params:
-  seperated_or_empty(COMMA,param) {$1}
+routine_params:
+  seperated_or_empty(COMMA,routine_param) { $1 }
 ;
-param:
+routine_param:
+  | NAME COLON                      { (Open, None, $1) }
+  | NAME COLON typ                  { (Open, Some $3, $1) }
+  | NAME COLON varmod               { ($3, None, $1) }
+  | NAME COLON varmod typ           { ($3, Some $4, $1) }
+;
+
+struct_params:
+  seperated(COMMA,struct_param) {$1}
+;
+struct_param:
   | NAME COLON typ                  { (Open, $3, $1) }
   | NAME COLON varmod typ           { ($3, $4, $1) }
 ;

@@ -715,9 +715,9 @@ let create_starter gs =
         "\targuments["^idx_s^"] = load_simple_argument("^tidx_s^",argv["^idx_s^"]);\n" in
     let rec aux ais cnt acc alloc_size = match ais with
         | [] -> (alloc_size, acc |> String.concat "")
-        | (_,T_Int)::t -> aux t (cnt+1) (arg_loader cnt 0::acc) (alloc_size+8)
-        | (_,T_Bool)::t -> aux t (cnt+1) (arg_loader cnt 1::acc) (alloc_size+1)
-        | (_,T_Char)::t -> aux t (cnt+1) (arg_loader cnt 2::acc) (alloc_size+1)
+        | (_,Some T_Int)::t -> aux t (cnt+1) (arg_loader cnt 0::acc) (alloc_size+8)
+        | (_,Some T_Bool)::t -> aux t (cnt+1) (arg_loader cnt 1::acc) (alloc_size+1)
+        | (_,Some T_Char)::t -> aux t (cnt+1) (arg_loader cnt 2::acc) (alloc_size+1)
         | _ -> failwith "Bad entry argument type"
     in
     let (alloc_size, loader) = aux arg_info 0 [] 0 in

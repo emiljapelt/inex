@@ -73,7 +73,9 @@ let rec write_type_info file vmod ty structs =
     )
     | T_Routine(_,params) -> (
       fprintf file "%c" (Char.chr (List.length params));
-      List.iter (fun (vm,t) -> write_type_info file vm t structs ) params;
+      params 
+      |> List.map (fun (vm, ty_opt) -> (vm, Option.get ty_opt)) 
+      |> List.iter (fun (vm,t) -> write_type_info file vm t structs );
     )
     | _ -> ()
   in
@@ -98,7 +100,7 @@ let write_entry_point_info file name addr args structs =
     | [] -> ()
     | (vmod,ty)::t -> write_type_info file vmod ty structs ; print_args t
   in
-  print_args args
+  args |> List.map (fun (vm, ty_opt) -> (vm, Option.get ty_opt)) |> print_args
 
 
 (* (access_mod * var_mod * typ * string) list *)

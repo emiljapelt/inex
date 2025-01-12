@@ -13,18 +13,8 @@ let to_string_map lst f_key f_value =
   in
   aux lst StringMap.empty
 
-let rec type_string t =
-  match t with
-  | T_Bool -> "bool"
-  | T_Int -> "int"
-  | T_Char -> "char"
-  | T_Array arr_ty -> (type_string (Option.get arr_ty))^"[]"
-  | T_Struct(n,typ_args) -> n ^ "<" ^ (String.concat ","  (List.map (fun e -> (type_string (Option.get e))) typ_args)) ^ ">"
-  | T_Null -> "null"
-  | T_Generic c -> String.make 1 c
-  | T_Routine(_,ts) -> "(" ^ (String.concat ","  (List.map (fun e -> type_string(snd e)) ts)) ^ ")"
-
 let rec type_equal type1 type2 =
+  Printf.printf "eq: %s vs. %s\n" (type_string type1) (type_string type2);
   let aux t1 t2 =
     match (t1, t2) with
     | (T_Int, T_Int) -> true
@@ -34,7 +24,12 @@ let rec type_equal type1 type2 =
     | (T_Struct(n1,ta1), T_Struct(n2, ta2)) when n1 = n2 && (List.length ta1) = (List.length ta2) -> true && (List.fold_right (fun e acc -> (type_equal (Option.get (fst e)) (Option.get (snd e))) && acc) (List.combine ta1 ta2) true)
     | (T_Null, _) -> true
     | (T_Generic c1, T_Generic c2) -> c1 = c2
-    | (T_Routine(_,types1), T_Routine(_,types2)) -> if List.length types1 = List.length types2 then List.fold_right (fun ((_,t1),(_,t2)) acc -> type_equal t1 t2 && acc) (List.combine types1 types2) true else false
+    | (T_Routine(_,types1), T_Routine(_,types2)) -> 
+      if List.length types1 = List.length types2 
+      then 
+        let extract_type = fun (vm,ty_opt) -> (vm, Option.get ty_opt) in
+        List.fold_right (fun ((_,t1),(_,t2)) acc -> type_equal t1 t2 && acc) (List.combine (List.map extract_type types1) (List.map extract_type types2)) true 
+      else false
     | _ -> false
   in aux type1 type2 || aux type2 type1
 
@@ -155,10 +150,10 @@ and type_inner_reference iref env contexts : var_mod * (typ, string) result =
       match ty with 
       | T_Struct (str_name, typ_args) -> (match lookup_struct str_name env.var_env.structs with
       | Some (typ_vars, fields) -> (
-        match replace_generics (List.map (fun (a,b,_) -> (a,b)) fields) typ_vars typ_args with
+        match replace_generics (List.map (fun (a,b,_) -> (a,Some b)) fields) typ_vars typ_args with
         | Ok resolved_fields -> (
           let (field_mod, field_ty,_) = struct_field field (List.map (fun ((a,b),c) -> (a,b,c)) (List.combine resolved_fields (List.map (fun (_,_,n) -> n) fields))) in
-          ((if vmod = Open then field_mod else Const), Ok field_ty)
+          ((if vmod = Open then field_mod else Const), Ok (Option.get field_ty))
         )
         | Error m -> raise_failure (m^"inner stuff")
       )
@@ -229,7 +224,7 @@ and type_value val_expr env contexts : var_mod * (op_typ, string) result =
   | NewStruct (name, typ_args, args) -> ( match lookup_struct name env.var_env.structs with
     | Some (typ_vars, params) -> (
       if (List.length typ_vars > 0) then ( (* Generic *)
-        let typ_args = resolve_type_args typ_vars typ_args (List.map (fun (a,b,_) -> (a,b)) params) args env contexts in
+        let typ_args = resolve_type_args typ_vars typ_args (List.map (fun (a,b,_) -> (a,Some b)) params) args env contexts in
         (Open, Ok(NOp_T(T_Struct(name, typ_args))))
       )
       else (Open, Ok(NOp_T(T_Struct(name, typ_args)))) (* Not generic *)
@@ -239,21 +234,28 @@ and type_value val_expr env contexts : var_mod * (op_typ, string) result =
   | StructLiteral _ -> (Open, Error "Cannot type a struct literal") (*(Open, Ok(NOp_T(T_Struct("",[])))) This is causing issue*)
   | AnonRoutine (tv,args,_) -> (Open, Ok(NOp_T(T_Routine(tv, List.map (fun (a,b,_) -> (a,b)) args))))
 
-  and replace_generic c typ_vars typ_args : (typ, string) result = 
+  and replace_generic c typ_vars typ_args : (typ option, string) result = 
     let rec aux lst = 
       match lst with
       | [] -> Error "Could not resolve generic index"
-      | (v,Some a)::t -> if v = c then Ok a else aux t
+      | (v,Some a)::t -> if v = c then Ok(Some a) else aux t
       | _::t -> aux t
     in
+    Printf.printf "c: %c\n" c;
+    List.iter (fun tv -> Printf.printf "tv: %c\n" tv) typ_vars ;
+    List.iter (fun (ta) -> Printf.printf "ta: %s\n" ( Option.value ta ~default:T_Null |> type_string)) typ_args ;
     aux (try List.combine typ_vars typ_args with | _ -> raise_failure "Missing type args") 
   
-  and replace_generics lst typ_vars typ_args : ((var_mod * typ) list, string) result = 
+  and replace_generics lst typ_vars typ_args : ((var_mod * typ option) list, string) result = 
+    Printf.printf "Replaceing generics...\n" ;
+    List.iter (fun e -> Printf.printf "pa: %s\n" (Option.value ~default:T_Null (snd e) |> type_string)) lst;
+    List.iter (Printf.printf "tv: %c\n") typ_vars;
+    List.iter (fun e -> Printf.printf "ta: %s\n" (Option.value ~default:T_Null e |> type_string)) typ_args;
     let rec replace element = 
       match element with
       | T_Generic(c) -> replace_generic c typ_vars typ_args
       | T_Array(sub) -> ( match replace (Option.get sub) with 
-        | Ok t -> Ok (T_Array (Some t))
+        | Ok t -> Ok(Some(T_Array t))
         | e -> e
       )
       | T_Struct(str_name, ta) -> (
@@ -263,33 +265,34 @@ and type_value val_expr env contexts : var_mod * (op_typ, string) result =
           | _, Error m -> Error m
           | Ok rs, Ok r -> Ok (Some r::rs)
         ) (Ok []) rep) in match rep' with
-        | Ok rs -> Ok(T_Struct(str_name, List.rev rs))
+        | Ok rs -> Ok(Some(T_Struct(str_name, rs |> List.map Option.join |> List.rev)))
         | Error m -> Error m
       )
       | T_Routine(_,ts) -> (
-        let rep = List.map (fun (vm,t) -> (vm, (replace t))) ts in
+        let rep = ts |> List.map (fun (vm,t_opt) -> (vm, Option.get t_opt)) |> List.map (fun (vm,t) -> (vm, (replace t))) in
         let rep' = List.fold_left (fun acc e -> match acc, e with
           | Error m, _ -> Error m
           | _ , (_,Error m) -> Error m
           | Ok rs, (vm, Ok r) -> Ok ((vm,r)::rs)
         ) (Ok []) rep in match rep' with
-        | Ok rs -> Ok(T_Routine([],List.rev rs))
+        | Ok rs -> Ok(Some(T_Routine([],rs |> List.map (fun (vm,t) -> (vm, t)) |> List.rev)))
         | Error m -> Error m
       )
-      | e -> Ok e
+      | e -> Ok(Some(e))
     in
     let aux element =
       match element with
-      | (vmod, ty) -> (vmod, replace ty)
+      | (vmod, Some ty) -> (vmod, replace ty)
+      | (vmod, None) -> (vmod, Ok None)
     in
     let reps = List.map aux lst in
     match List.fold_left (fun acc e -> match acc, e with
       | Error m, _ -> Error m
       | _, (_,Error m) -> Error m
-      | Ok rs, (v,Ok r) -> Ok ((v,r)::rs)
+      | Ok rs, (v,Ok r) -> Ok ((v,Some r)::rs)
     ) (Ok []) reps with
-    | Ok rs -> Ok (List.rev rs)
-    | e -> e
+    | Ok rs -> Ok (rs |> List.map (fun (vm, t_opt) -> (vm, Option.join t_opt)) |> List.rev)
+    | Error msg -> Error msg
   
   (*and is_fully_defined_type typ_opt var_env =
     match typ_opt with
@@ -311,7 +314,7 @@ and well_defined_type typ_opt var_env =
     | None -> false
     | Some(tvs,_) -> (List.length tvs = List.length typ_args) && List.fold_left (fun acc ta -> (well_defined_type ta var_env) && acc) true typ_args 
   )
-  | Some(T_Routine(_,ts)) -> List.fold_left (fun acc (_,t) -> well_defined_type (Some t) var_env && acc) true ts
+  | Some(T_Routine(_,ts)) -> List.fold_left (fun acc (_,t) -> well_defined_type t var_env && acc) true ts
   | _ -> true
 
   and dig_into_struct typ typ_vars_args_map param_arg_map var_env acc =
@@ -323,12 +326,13 @@ and well_defined_type typ_opt var_env =
   and find_related_args typ param_arg_map (env : environment) acc =
     match param_arg_map with
     | [] -> acc
-    | ((_,p_typ), expr)::t when type_equal typ p_typ -> find_related_args typ t env (expr::acc)
-    | ((_,T_Array(Some st)), Value(ArrayLiteral(exprs)))::t when type_equal st typ -> find_related_args typ t env (List.rev_append acc exprs)
-    | (((_,T_Struct(name,typ_args)), expr)::t) -> find_related_args typ t env ( match lookup_struct name env.var_env.structs with
+    | ((_,None), _)::t -> find_related_args typ t env acc
+    | ((_,Some p_typ), expr)::t when type_equal typ p_typ -> find_related_args typ t env (expr::acc)
+    | ((_,Some T_Array(Some st)), Value(ArrayLiteral(exprs)))::t when type_equal st typ -> find_related_args typ t env (List.rev_append acc exprs)
+    | (((_,Some T_Struct(name,typ_args)), expr)::t) -> find_related_args typ t env ( match lookup_struct name env.var_env.structs with
       | None -> raise_failure ("No such struct: " ^ name)
       | Some(tvs,params) -> ( match expr with
-        | Value(StructLiteral(exprs)) -> dig_into_struct typ (List.combine tvs typ_args) (List.combine (List.map (fun (a,b,_) -> (a,b)) params) exprs) env acc
+        | Value(StructLiteral(exprs)) -> dig_into_struct typ (List.combine tvs typ_args) (List.combine (List.map (fun (a,b,_) -> (a,Some b)) params) exprs) env acc
         | _ -> find_related_args typ t env acc
       )
     )
@@ -342,32 +346,36 @@ and well_defined_type typ_opt var_env =
   and find_possible_type typ param_arg_map (env : environment) contexts : (op_typ, string) result =
     match param_arg_map with
     | [] -> Error "Could not infere a type for unspecifed type argument"
-    | ((_,p_typ), expr)::t when type_equal typ p_typ -> ( match type_expr expr env contexts with 
+    | ((_,None),_)::t -> find_possible_type typ t env contexts
+    | ((_,Some p_typ), expr)::t when type_equal typ p_typ -> ( match type_expr expr env contexts with 
       | (_,Ok ot) -> Ok ot
       | _ -> find_possible_type typ t env contexts
     )
-    | ((_,T_Array(Some st)), expr)::t when type_equal st typ -> ( match type_expr expr env contexts with
+    | ((_,Some T_Array(Some st)), expr)::t when type_equal st typ -> ( match type_expr expr env contexts with
       | (_,Ok ot) -> ( match translate_operational_type ot with
         | T_Array(Some st) -> Ok(NOp_T st)
         | _ -> find_possible_type typ t env contexts
       )
       | _ -> find_possible_type typ t env contexts
     )
-    | (((_,T_Routine(_,params)), expr)::t) -> ( match type_expr expr env contexts with
+    | (((_,Some T_Routine(_,params)), expr)::t) -> ( match type_expr expr env contexts with
       | (_,Ok ot) -> ( match translate_operational_type ot with
-        | T_Routine(_,ps) -> ( if not(List.length ps = List.length params) then find_possible_type typ t env contexts else match List.fold_left (fun acc ((_,p1),(_,p2)) -> if Result.is_ok acc then acc else (if type_equal typ p1 then (if not(is_generic p2) then (Ok p2) else acc) else acc) ) (Error "Sad") (List.combine params ps) with
-          | Ok t -> Ok(NOp_T t)
-          | _ -> find_possible_type typ t env contexts
+        | T_Routine(_,ps) -> ( 
+          if not(List.length ps = List.length params) 
+            then find_possible_type typ t env contexts 
+            else match List.fold_left (fun acc ((_,p1),(_,p2)) -> if Result.is_ok acc then acc else (if Option.is_some p1 && type_equal typ (Option.get p1) then (if Option.is_some p2 && not(is_generic (Option.get p2)) then (Ok (Option.get p2)) else acc) else acc) ) (Error "Sad") (List.combine params ps) with
+            | Ok t -> Ok(NOp_T t)
+            | _ -> find_possible_type typ t env contexts
         )
         | _ -> find_possible_type typ t env contexts
       )
       | _ -> find_possible_type typ t env contexts
     )
-    | (((_,T_Struct(name,_)), expr)::t) -> ( match lookup_struct name env.var_env.structs with
+    | (((_,Some T_Struct(name,_)), expr)::t) -> ( match lookup_struct name env.var_env.structs with
       | None -> raise_failure ("No such struct: " ^ name)
       | Some(_,params) -> ( match expr with
         | Value(StructLiteral(exprs)) -> (
-          find_possible_type typ (List.combine (List.map (fun (a,b,_) -> (a,b)) params) exprs) env contexts
+          find_possible_type typ (List.combine (List.map (fun (a,b,_) -> (a,Some b)) params) exprs) env contexts
         )
         | _ -> find_possible_type typ t env contexts
       )
@@ -389,7 +397,7 @@ and well_defined_type typ_opt var_env =
     else if List.length typ_args = List.length typ_vars then typ_args
     else raise_failure ("Expected " ^(string_of_int (List.length typ_vars))^ " type arguments, but was given " ^(string_of_int (List.length typ_args))) 
 
-  and resolve_type_args typ_vars typ_args (params : (var_mod * typ) list) args (env : environment) contexts =
+  and resolve_type_args typ_vars typ_args (params : (var_mod * typ option) list) args (env : environment) contexts =
     let typ_args = fix_type_args typ_vars typ_args in
     let rec aux tvas acc =
       match tvas with
@@ -407,9 +415,9 @@ and well_defined_type typ_opt var_env =
               let rec infer_from_related related_exprs =
                 match related_exprs with
                 | [] -> raise_failure "Could not infer a type from context"
-                | Value(StructLiteral(exprs))::t -> (try (Some(T_Struct(name, resolve_type_args tvs tas (List.map (fun (a,b,_) -> (a,b)) ps) exprs env contexts))) with | _ -> infer_from_related t)
+                | Value(StructLiteral(exprs))::t -> (try (Some(T_Struct(name, resolve_type_args tvs tas (List.map (fun (a,b,_) -> (a,Some b)) ps) exprs env contexts))) with | _ -> infer_from_related t)
                 | Value(NewStruct(name,tas,exprs))::t -> ( match lookup_struct name env.var_env.structs with
-                  | Some(tvs,ps) -> (try (Some(T_Struct(name, resolve_type_args tvs tas (List.map (fun (a,b,_) -> (a,b)) ps) exprs env contexts))) with | _ -> infer_from_related t)
+                  | Some(tvs,ps) -> (try (Some(T_Struct(name, resolve_type_args tvs tas (List.map (fun (a,b,_) -> (a, Some b)) ps) exprs env contexts))) with | _ -> infer_from_related t)
                   | None -> raise_failure ("No such struct: " ^ name)
                 )
                 | Reference(Null)::t -> infer_from_related t
@@ -423,6 +431,18 @@ and well_defined_type typ_opt var_env =
       )
     in
     aux (List.combine typ_vars typ_args) []
+
+let rec fillout_missing_type t_opt expr = match t_opt, expr with
+  | Some T_Routine(_,p_params), Value AnonRoutine(generics,a_params,body) -> Value(AnonRoutine(generics, List.map ( fun (p_param,a_param) -> match p_param,a_param with
+    | (_,None),(_,None,_) -> raise_failure ("Nothing to fill out with")
+    | (_,Some t),(a_vm,None,n) -> (a_vm, Some t, n)
+    | _,(a_vm,Some t,n) -> (a_vm, Some t, n)) (List.combine p_params a_params), body
+  ))
+  | Some T_Array(st_opt), Value ArrayLiteral(exprs) -> Value(ArrayLiteral(List.map (fun expr -> fillout_missing_type st_opt expr) exprs))
+  | _,_ -> expr
+
+let fillout_untyped_routine_parameters params args = 
+  List.combine params args |> List.map (fun (p,a) -> fillout_missing_type p a)
 
 let elements_unique lst =
   let rec aux l seen =
@@ -445,51 +465,52 @@ let parameters_check typ_vars structs params =
       | Some(tvs, _) -> List.length tvs = List.length typ_args && List.fold_left (fun acc field_ty -> (check (Option.get field_ty)) && acc) true typ_args
       | None -> false
     )
-    | T_Routine(_,types) -> List.fold_left (fun acc (_,typ) -> (check typ) && acc) true types
+    | T_Routine(_,types) -> List.fold_left (fun acc (_,typ) -> (check (Option.get typ)) && acc) true types
   in
-  List.fold_left (fun acc (_,ty) -> (check ty) && acc) true params
+  List.fold_left (fun acc ty -> (check ty) && acc) true params
 
 let check_topdecs file structs =
   let rec aux tds =
     match tds with
     | [] -> ()
     | GlobalDeclaration(Entry,dec)::t -> ( match dec with
-      | TypeDeclaration(_,T_Routine(_,ps),_) -> ( match List.for_all (fun (_,pt) -> simple_type pt) ps with
+      | TypeDeclaration(_,T_Routine(_,ps),_) -> ( match List.for_all (fun (_,pt) -> simple_type (Option.get pt)) ps with
         | true -> aux t
-        | false -> raise_failure "Entry points can only havesimple types as parameters"
+        | false -> raise_failure "Entry points can only have simple types as parameters"
       )
       | TypeDeclaration(_,_,_) -> raise_failure "Entry points must be a routine"
-      | AssignDeclaration(_,Some(T_Routine(_,ps)),_,_) -> ( match List.for_all (fun (_,pt) -> simple_type pt) ps with
+      | AssignDeclaration(_,Some(T_Routine(_,ps)),_,_) -> ( match List.for_all (fun (_,pt) -> simple_type (Option.get pt)) ps with
         | true -> aux t
-        | false -> raise_failure "Entry points can only havesimple types as parameters"
+        | false -> raise_failure "Entry points can only have simple types as parameters"
       )
-      | AssignDeclaration(_,None,_,Value(AnonRoutine(_,nps,_))) -> ( match List.for_all (fun (_,pt,_) -> simple_type pt) nps with
+      | AssignDeclaration(_,None,_,Value(AnonRoutine(_,nps,_))) -> ( match List.for_all (fun (_,pt,_) -> simple_type (Option.get pt)) nps with
         | true -> aux t
-        | false -> raise_failure "Entry points can only havesimple types as parameters"
+        | false -> raise_failure "Entry points can only have simple types as parameters"
       )
       | AssignDeclaration(_,_,_,_) -> raise_failure  "Entry points must be a routine"
     )
     | GlobalDeclaration(_,dec)::t -> ( match dec with
       | TypeDeclaration(_,T_Routine(typ_vars,params),name) -> ( 
         if not(elements_unique typ_vars) then raise_failure ("Non-unique type variables in routine definition '" ^ name ^ "'")
-        else if not(parameters_check typ_vars structs params) then raise_failure ("illegal parameters in defenition of routine '" ^ name ^ "'")
+        else if List.exists (fun (_,t_opt) -> Option.is_none t_opt) params then raise_failure ("Cannot have untyped parameters in type definition of routine '" ^ name ^ "'")
+        else if not(parameters_check typ_vars structs (List.map (fun (_,t_opt) -> Option.get t_opt) params)) then raise_failure ("illegal parameters in defenition of routine '" ^ name ^ "'")
         else aux t
       )
       | AssignDeclaration(_,Some(T_Routine(typ_vars,params)),name,_) -> ( 
         if not(elements_unique typ_vars) then raise_failure ("Non-unique type variables in routine definition '" ^ name ^ "'")
-        else if not(parameters_check typ_vars structs params) then raise_failure ("illegal parameters in defenition of routine '" ^ name ^ "'")
+        else if not(parameters_check typ_vars structs (List.map (fun (_,t_opt) -> Option.get t_opt) params)) then raise_failure ("illegal parameters in defenition of routine '" ^ name ^ "'")
         else aux t
       )
       | AssignDeclaration(_,None,name,Value(AnonRoutine(typ_vars,nps,_))) -> (
         if not(elements_unique typ_vars) then raise_failure ("Non-unique type variables in routine definition '" ^ name ^ "'")
-        else if not(parameters_check typ_vars structs (List.map (fun (a,b,_) -> (a,b)) nps)) then raise_failure ("illegal parameters in defenition of routine '" ^ name ^ "'")
+        else if not(parameters_check typ_vars structs (List.map (fun (_,b,_) -> Option.get b) nps)) then raise_failure ("illegal parameters in defenition of routine '" ^ name ^ "'")
         else aux t
       )
       | _ -> aux t
     )
     | Struct(name,typ_vars,params)::t -> ( 
       if not(elements_unique typ_vars) then raise_failure ("Non-unique type variables in struct definition '" ^ name ^ "'")
-      else if not(parameters_check typ_vars structs (List.map (fun (a,b,_) -> (a,b)) params)) then raise_failure ("illegal parameters in defenition of struct '" ^ name ^ "'")
+      else if not(parameters_check typ_vars structs (List.map (fun (_,b,_) -> b) params)) then raise_failure ("illegal parameters in defenition of struct '" ^ name ^ "'")
       else aux t
     )
     | _::t -> aux t
@@ -503,20 +524,20 @@ let check_structs structs =
   ) structs StringSet.empty |> ignore
 
 let check_struct_literal struct_fields expr (env : environment) contexts =
-  let rec aux (pairs : ((var_mod * typ) * expression) list) =
+  let rec aux (pairs : ((var_mod * typ option) * expression) list) =
     match pairs with
     | [] -> true 
-    | ((_,T_Struct(name,typ_args)), Value(StructLiteral(exprs)))::t -> (
+    | ((_,Some T_Struct(name,typ_args)), Value(StructLiteral(exprs)))::t -> (
       match lookup_struct name env.var_env.structs with
       | None -> false
       | Some(tvs,ps) -> (
-        match replace_generics (List.map (fun (a,b,_) -> (a,b)) ps) tvs typ_args with
+        match replace_generics (List.map (fun (a,b,_) -> (a,Some b)) ps) tvs typ_args with
         | Ok rs -> aux (List.combine rs exprs)
         | Error m -> raise_failure (m ^ "big sad")
       ) && aux t
     )
-    | ((_,T_Null),_)::_ -> false
-    | ((vmod,typ),e)::t -> (
+    | ((_,Some T_Null),_)::_ -> false
+    | ((vmod,Some typ),e)::t -> (
       let (expr_vmod, expr_typ_res) = type_expr e env contexts in
       match expr_typ_res with
       | Ok(expr_typ) -> (
@@ -526,6 +547,7 @@ let check_struct_literal struct_fields expr (env : environment) contexts =
       )
       | Error _ -> false
     )
+    | ((_, None),_)::_ -> raise_failure "Missing struct field type"
   in match expr with
   | Value(StructLiteral(exprs)) -> (try aux (List.combine struct_fields exprs) with | _ -> false)
   | Reference(Null) -> true
@@ -549,8 +571,8 @@ let resolve_type typ_opt expr (env : environment) contexts : typ =
         | Reference(Null) -> raise_failure "Cannot infer from null"
         | Reference(ref) -> (Result.get_ok (snd(type_reference ref env contexts)))
         | Value(StructLiteral(exprs)) -> (
-            let typ_args = resolve_type_args typ_vars typ_args (List.map (fun (a,b,_) -> (a,b)) params) exprs env contexts in
-            match replace_generics (List.map (fun (a,b,_) -> (a,b)) params) typ_vars typ_args with
+            let typ_args = resolve_type_args typ_vars typ_args (List.map (fun (a,b,_) -> (a,Some b)) params) exprs env contexts in
+            match replace_generics (List.map (fun (a,b,_) -> (a,Some b)) params) typ_vars typ_args with
             | Ok params -> (
               if not(check_struct_literal params (Value (StructLiteral exprs)) env contexts) then raise_failure ("Could not match struct literal with '" ^ type_string (T_Struct(name,typ_args)) ^ "'")
               else (T_Struct(name,typ_args))
@@ -559,7 +581,7 @@ let resolve_type typ_opt expr (env : environment) contexts : typ =
         )
         | Value(NewStruct(expr_name,tas,args)) -> (
             if not(expr_name = name) then raise_failure "mismatched struct names" else
-            let expr_typ_args = resolve_type_args typ_vars tas (List.map (fun (a,b,_) -> (a,b)) params) args env contexts in
+            let expr_typ_args = resolve_type_args typ_vars tas (List.map (fun (a,b,_) -> (a,Some b)) params) args env contexts in
             let typ_args = List.map (fun x -> (fst x)) (List.combine typ_args expr_typ_args) in
             (T_Struct(name,typ_args))
         )
@@ -586,6 +608,7 @@ let argument_checks target_vmod target_typ expr_vmod expr_typ =
       | _ -> Ok expr_typ
 
 let rec type_check checks vmod typ expr (env : environment) contexts : (op_typ, string) result =
+  Printf.printf "Type checking...\n";
   match typ, expr with
   | None, Value(StructLiteral(_)) -> Error "Cannot infer a type from a struct literal"
   | Some(T_Struct _ as t), Reference(Null) -> if well_defined_type (Some t) env.var_env then Ok (NOp_T t) else Error "Cannot infer a type from 'null'"
@@ -639,8 +662,8 @@ let rec type_check checks vmod typ expr (env : environment) contexts : (op_typ, 
   | Some(T_Struct(name,typ_args)), (Value(StructLiteral(exprs)) as literal) -> ( match lookup_struct name env.var_env.structs with
     | Some(typ_vars,params) ->  (
       let typ_args = if typ_args = [] then List.init (List.length typ_vars) (fun _ -> None) else typ_args in
-      let typ_args = resolve_type_args typ_vars typ_args (List.map (fun (a,b,_) -> (a,b)) params) exprs env contexts in
-      match replace_generics (List.map (fun (a,b,_) -> (a,b)) params) typ_vars typ_args with
+      let typ_args = resolve_type_args typ_vars typ_args (List.map (fun (a,b,_) -> (a,Some b)) params) exprs env contexts in
+      match replace_generics (List.map (fun (a,b,_) -> (a,Some b)) params) typ_vars typ_args with
       | Error _ as e -> e
       | Ok params -> (
         if not(check_struct_literal params literal env contexts) then Error ("Could not match struct literal with '" ^ type_string (T_Struct(name,typ_args)) ^ "'")
@@ -653,10 +676,10 @@ let rec type_check checks vmod typ expr (env : environment) contexts : (op_typ, 
     | Some(typ_vars,params) ->  (
       if not(expr_name = name) then raise_failure "mismatched struct names" else
       let matched_typ_args = List.map (fun ts -> match_typ_arg ts) (List.combine (fix_type_args typ_vars typ_args) (fix_type_args typ_vars tas)) in
-      let resolved_typ_args = resolve_type_args typ_vars matched_typ_args (List.map (fun (a,b,_) -> (a,b)) params) args env contexts in
-      match replace_generics (List.map (fun (a,b,_) -> (a,b)) params) typ_vars resolved_typ_args with
+      let resolved_typ_args = resolve_type_args typ_vars matched_typ_args (List.map (fun (a,b,_) -> (a,Some b)) params) args env contexts in
+      match replace_generics (List.map (fun (a,b,_) -> (a,Some b)) params) typ_vars resolved_typ_args with
       | Ok params -> (
-        if not(List.fold_left (fun acc ((_,param_typ),arg) -> acc && type_equal param_typ (translate_operational_type(Result.get_ok (snd(type_expr arg env contexts))))) true (List.combine params args)) then raise_failure ("Struct argument type mismatch") 
+        if not(List.fold_left (fun acc ((_,param_typ_opt),arg) -> acc && type_equal (Option.get param_typ_opt) (translate_operational_type(Result.get_ok (snd(type_expr arg env contexts))))) true (List.combine params args)) then raise_failure ("Struct argument type mismatch") 
         else Ok(NOp_T(T_Struct(name,resolved_typ_args)))
       )
       | Error m -> raise_failure (m^"lol what")
@@ -665,10 +688,10 @@ let rec type_check checks vmod typ expr (env : environment) contexts : (op_typ, 
   )
   | None, Value(NewStruct(name,typ_args,args)) -> ( match lookup_struct name env.var_env.structs with
     | Some(typ_vars,params) ->  (
-      let resolved_typ_args = resolve_type_args typ_vars typ_args (List.map (fun (a,b,_) -> (a,b)) params) args env contexts in
-      match replace_generics (List.map (fun (a,b,_) -> (a,b)) params) typ_vars resolved_typ_args with
+      let resolved_typ_args = resolve_type_args typ_vars typ_args (List.map (fun (a,b,_) -> (a,Some b)) params) args env contexts in
+      match replace_generics (List.map (fun (a,b,_) -> (a,Some b)) params) typ_vars resolved_typ_args with
       | Ok params -> (
-        if not(List.fold_left (fun acc ((_,param_typ),arg) -> acc && type_equal param_typ (translate_operational_type(Result.get_ok (snd(type_expr arg env contexts))))) true (List.combine params args)) then raise_failure ("Struct argument type mismatch") 
+        if not(List.fold_left (fun acc ((_,param_typ_opt),arg) -> acc && type_equal (Option.get param_typ_opt) (translate_operational_type(Result.get_ok (snd(type_expr arg env contexts))))) true (List.combine params args)) then raise_failure ("Struct argument type mismatch") 
         else Ok(NOp_T(T_Struct(name,resolved_typ_args)))
       )
       | Error m -> raise_failure (m^"more fails")
@@ -682,6 +705,7 @@ let rec type_check checks vmod typ expr (env : environment) contexts : (op_typ, 
     | Error m -> Error m
   )
   | Some(target_typ), expr -> (
+    Printf.printf "aaa\n";
     let (vm, typ_res) = type_expr expr env contexts in
     match typ_res with
     | Ok(expr_typ) -> checks vmod target_typ vm expr_typ

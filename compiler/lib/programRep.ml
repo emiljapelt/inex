@@ -25,7 +25,7 @@ and typ =
   | T_Struct of string * typ option list
   | T_Null
   | T_Generic of char
-  | T_Routine of char list * (var_mod * typ) list
+  | T_Routine of char list * (var_mod * typ option) list
 
 and op_typ =
   | NOp_T of typ
@@ -116,8 +116,8 @@ let rec type_string ty = match ty with
   | T_Struct(n,_) -> n
   | T_Null -> "null"
   | T_Generic c -> String.make 1 c
-  | T_Routine([],args) -> "("^ (List.map (fun (_,ty) -> type_string ty) args |> String.concat ",") ^")"
-  | T_Routine(tvs,args) -> "<"^ (List.map (String.make 1) tvs |> String.concat ",") ^">("^ (List.map (fun (_,ty) -> type_string ty) args |> String.concat ",") ^")"
+  | T_Routine([],args) -> "("^ (List.map (fun (_,ty_opt) -> Option.fold ~none:"_" ~some:(fun ty -> type_string ty) ty_opt) args |> String.concat ",") ^")"
+  | T_Routine(tvs,args) -> "<"^ (List.map (String.make 1) tvs |> String.concat ",") ^">" ^ (type_string (T_Routine([], args)))
 
 let type_index ty = match ty with
   | T_Int -> 0

@@ -1,0 +1,34 @@
+
+
+struct tuple<T>(fst: T, snd: T)
+
+intern t :tuple:= {1,2}
+
+intern do ::= <T>(a: T, f: (T)) {
+    f(a);
+}
+
+intern iter ::= <T>(a: T[], f: (T)) {
+    for(i ::= 0; i < |a|; i +:= 1)
+        f(a[i]);
+}
+
+entry main ::= () {
+    // print("Hello world\n");
+    // do('a', (c:) { print(c); });
+
+    // t :tuple:= { 
+    //     (c: char) { print(c); }, 
+    //     (c:) { print(c); }
+    // };
+
+    f :(char):= (c:) { print(c); };
+
+    t :(char)[]:= [(c:) { print(c); }];
+
+    t[0]('a');
+
+    iter("Hello", c => print(c); );
+}
+
+entry main2 ::= () print("Hello world!\n");

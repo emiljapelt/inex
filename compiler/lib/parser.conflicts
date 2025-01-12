@@ -1,0 +1,103 @@
+
+** Conflict (shift/reduce) in state 278.
+** Token involved: RPAR
+** This state is reached from main after reading:
+
+accmod NAME COLON ASSIGNMENT LPAR routine_params RPAR LBRACE REPEAT LPAR const_value
+
+** The derivations that appear below have the following common factor:
+** (The question mark symbol (?) represents the spot where the derivations begin to differ.)
+
+main 
+topdecs EOF 
+topdec topdecs 
+accmod dec semi_opt 
+       NAME COLON ASSIGNMENT expression 
+                             value 
+                             LPAR routine_params RPAR block 
+                                                      LBRACE list(stmtOrDec) RBRACE 
+                                                             stmtOrDec list(stmtOrDec) 
+                                                             stmt 
+                                                             stmt1 
+                                                             (?)
+
+** In state 278, looking ahead at RPAR, reducing production
+** simple_value -> const_value
+** is permitted because of the following sub-derivation:
+
+REPEAT LPAR expression_not_ternary RPAR stmt1 // lookahead token appears
+            value // lookahead token is inherited
+            simple_value // lookahead token is inherited
+            const_value . 
+
+** In state 278, looking ahead at RPAR, shifting is permitted
+** because of the following sub-derivation:
+
+REPEAT LPAR const_value . RPAR stmt1 
+
+** Conflict (shift/reduce) in state 181.
+** Token involved: RPAR
+** This state is reached from main after reading:
+
+accmod NAME COLON ASSIGNMENT LPAR value
+
+** The derivations that appear below have the following common factor:
+** (The question mark symbol (?) represents the spot where the derivations begin to differ.)
+
+main 
+topdecs EOF 
+topdec topdecs 
+accmod dec semi_opt 
+       NAME COLON ASSIGNMENT expression 
+                             (?)
+
+** In state 181, looking ahead at RPAR, reducing production
+** expression -> value
+** is permitted because of the following sub-derivation:
+
+expression_not_ternary QMARK expression COLON expression 
+LPAR expression RPAR // lookahead token appears
+     value . 
+
+** In state 181, looking ahead at RPAR, shifting is permitted
+** because of the following sub-derivation:
+
+value 
+simple_value 
+LPAR value . RPAR 
+
+** Conflict (reduce/reduce) in state 125.
+** Token involved: RPAR
+** This state is reached from main after reading:
+
+accmod NAME COLON ASSIGNMENT LPAR NAME
+
+** The derivations that appear below have the following common factor:
+** (The question mark symbol (?) represents the spot where the derivations begin to differ.)
+
+main 
+topdecs EOF 
+topdec topdecs 
+accmod dec semi_opt 
+       NAME COLON ASSIGNMENT expression 
+                             (?)
+
+** In state 125, looking ahead at RPAR, reducing production
+** inner_reference -> NAME
+** is permitted because of the following sub-derivation:
+
+expression_not_ternary QMARK expression COLON expression 
+LPAR expression RPAR // lookahead token appears
+     reference // lookahead token is inherited
+     inner_reference // lookahead token is inherited
+     NAME . 
+
+** In state 125, looking ahead at RPAR, reducing production
+** routine_param -> NAME
+** is permitted because of the following sub-derivation:
+
+value 
+LPAR routine_params RPAR block // lookahead token appears
+     seperated_or_empty(COMMA,routine_param) // lookahead token is inherited
+     routine_param // lookahead token is inherited
+     NAME . 

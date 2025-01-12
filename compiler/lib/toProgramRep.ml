@@ -314,6 +314,7 @@ and compile_structure args typs var_env contexts acc =
   PlaceFull(C_Int (List.length args)) :: DeclareStruct :: (List.fold_left (fun acc (typ, (arg, c)) -> compile_structure_arg arg typ c var_env contexts acc) acc (List.combine typs (List.mapi (fun i a -> (a,i)) args)))
 
 and compile_value val_expr (op_typ: op_typ) env contexts acc =
+  Printf.printf "Compiling value...\n" ;
   match val_expr with
   | Bool b -> PlaceByte(C_Bool b) :: acc
   | Int i -> PlaceFull(C_Int i) :: acc
@@ -330,6 +331,7 @@ and compile_value val_expr (op_typ: op_typ) env contexts acc =
   )
   | ArrayLiteral exprs -> ( match translate_operational_type op_typ with
     | T_Array st -> (
+      let exprs = fillout_untyped_routine_parameters (List.init (List.length exprs) (fun _ -> st)) exprs in
       let typs = List.map (fun _ -> NOp_T (Option.get st)) exprs in
       compile_structure exprs typs env contexts (IncrRef :: acc)
     )
@@ -338,8 +340,10 @@ and compile_value val_expr (op_typ: op_typ) env contexts acc =
   | NewStruct (_, _, exprs)
   | StructLiteral (exprs) -> ( match translate_operational_type op_typ with
     | T_Struct(name,typ_args) -> ( match lookup_struct name env.var_env.structs with
-      | Some(tvs,ps) -> ( match replace_generics (List.map (fun (a,b,_) -> (a,b)) ps) tvs typ_args with
-        | Ok typs -> compile_structure exprs (List.map (fun (_,t) -> NOp_T t) typs) env contexts (IncrRef :: acc)
+      | Some(tvs,ps) -> ( match replace_generics (List.map (fun (a,b,_) -> (a,Some b)) ps) tvs typ_args with
+        | Ok typs -> 
+          let exprs = fillout_untyped_routine_parameters (List.map snd typs) exprs in
+          compile_structure exprs (List.map (fun (_,t) -> NOp_T (Option.get t)) typs) env contexts (IncrRef :: acc)
         | Error m -> raise_failure (m^"what is going on")
       )
        (* let typs = List.map (fun t -> match t with Ok(_,t) -> NOp_T t | _ -> raise_failure ":(") () in
@@ -389,18 +393,28 @@ and compile_value val_expr (op_typ: op_typ) env contexts acc =
   )
   | AnonRoutine(tvs,params,stmt) -> (
     if not(elements_unique tvs) then raise_failure ("Non-unique type variables in anonymous routine")
-    else if not(parameters_check tvs env.var_env.structs (List.map (fun (a,b,_) -> (a,b)) params)) then raise_failure ("illegal parameters in anonymous routine")
-    else let label = new_label () in
-    let skip = new_label () in
-    CPlaceLabel label :: GoTo skip :: CLabel label :: compile_stmt stmt {env with var_env = ({env.var_env with locals = List.rev params; typ_vars = tvs}) } contexts None None 0 (addStop(CLabel skip :: acc))
-  )
+    else (*match translate_operational_type op_typ with 
+      | T_Routine(tvs, typ_args) -> ( match replace_generics (List.map (fun (a,b,_) -> (a,b)) params) tvs (List.map snd typ_args) with
+        | Error m -> raise_failure (m^"what is going on with routines!")
+        | Ok typs -> (*compile_structure exprs (List.map (fun (_,t) -> NOp_T (Option.get t)) typs) env contexts (IncrRef :: acc)*)
+        ( *)
+          if not(parameters_check tvs env.var_env.structs (List.map (fun (_,b,_) -> Option.get b) params)) then raise_failure ("illegal parameters in anonymous routine")
+          else let label = new_label () in
+          let skip = new_label () in
+          CPlaceLabel label :: GoTo skip :: CLabel label :: compile_stmt stmt {env with var_env = ({env.var_env with locals = params |> List.map (fun (vm,t_opt,n) -> (vm,Option.get t_opt,n)) |> List.rev; typ_vars = tvs}) } contexts None None 0 (addStop(CLabel skip :: acc))
+        )(*
+      )
+      | _ -> raise_failure "Not a routine type"
+    *)
 
 and compile_argument arg (env : environment) contexts acc =
   match arg with ((pmod, pty),eh) -> (
+      Printf.printf "Comping argument...\n";
       let opteh = optimize_expr eh env.var_env in
       let typ_res = argument_type_check pmod (Some pty) opteh env contexts in
       let op_typ = if Result.is_ok typ_res then Result.get_ok typ_res else raise_failure (Result.get_error typ_res) in
       let typ = translate_operational_type op_typ in
+      Printf.printf "arg type: %s\n" (type_string typ) ;
       match opteh with
       | Value _ -> ( match typ with
         | T_Int -> DeclareFull :: IncrRef :: CloneFull :: (compile_expr_as_value opteh op_typ env contexts (WriteFull :: acc))
@@ -445,6 +459,8 @@ and compile_argument arg (env : environment) contexts acc =
     )
 
 and compile_arguments args (env : environment) contexts acc =
+  Printf.printf "Compiling call arguments...\n";
+  List.iter (fun ((_,t),_) -> Printf.printf "arg: %s\n" (type_string t)) args;
   let rec aux ars acc =
     match ars with
     | [] -> acc
@@ -520,7 +536,7 @@ and compile_assignment target assign (env : environment) contexts acc =
           )
         )
       )
-      | (_, Ok t) -> raise_failure ("Struct field assignment to variable of type '" ^ Typing.type_string t ^ "'") 
+      | (_, Ok t) -> raise_failure ("Struct field assignment to variable of type '" ^ type_string t ^ "'") 
       | (_, Error m) -> raise_failure m
     )
     | (StructAccess(refer, field), Reference re) -> ( match Typing.type_inner_reference refer env contexts with
@@ -539,7 +555,7 @@ and compile_assignment target assign (env : environment) contexts acc =
           )
         )
       )
-      | (_,Ok t) -> raise_failure ("Struct field assignment to variable of type '" ^ Typing.type_string t ^ "'") 
+      | (_,Ok t) -> raise_failure ("Struct field assignment to variable of type '" ^ type_string t ^ "'") 
       | (_, Error m) -> raise_failure m
     )
     | (ArrayAccess(refer, index), Value v) -> ( match Typing.type_inner_reference refer env contexts with
@@ -562,7 +578,7 @@ and compile_assignment target assign (env : environment) contexts acc =
         )
         | Error m -> raise_failure m
         )
-      | (_,Ok t) -> raise_failure ("Array assignment to variable of type '" ^ Typing.type_string t ^ "'") 
+      | (_,Ok t) -> raise_failure ("Array assignment to variable of type '" ^ type_string t ^ "'") 
       | (_,Error m) -> raise_failure m
     )
     | (ArrayAccess(refer, index), Reference re) -> ( match Typing.type_inner_reference refer env contexts with
@@ -585,12 +601,13 @@ and compile_assignment target assign (env : environment) contexts acc =
         )
         | Error m -> raise_failure m
         )
-      | (_,Ok t) -> raise_failure ("Array assignment to variable of type '" ^ Typing.type_string t ^ "'") 
+      | (_,Ok t) -> raise_failure ("Array assignment to variable of type '" ^ type_string t ^ "'") 
       | (_, Error m) -> raise_failure m
     )
   )
 
 and compile_declaration dec env contexts =
+  Printf.printf "Compiling declaration...\n" ;
   match dec with
   | TypeDeclaration (vmod, typ, name) -> (
     if localvar_exists name env.var_env.locals then raise_failure ("Duplicate variable name '" ^ name ^ "'")
@@ -611,9 +628,11 @@ and compile_declaration dec env contexts =
   | AssignDeclaration (vmod, typ, name, expr) -> (
     if localvar_exists name env.var_env.locals then raise_failure ("Duplicate variable name '" ^ name ^ "'") ;
     let opt_expr = optimize_expr expr env.var_env in
+    let opt_expr = fillout_missing_type typ opt_expr in
     let typ_res = declaration_type_check vmod typ opt_expr env contexts in
     let o_typ = if Result.is_ok typ_res then Result.get_ok typ_res else raise_failure (Result.get_error typ_res) in
     let typ = translate_operational_type o_typ in
+    Printf.printf "Assignment declaration type: %s...\n" (type_string typ) ;
     ( update_locals env vmod typ name,
       match opt_expr with
       | Reference(LocalContext(Access _)) -> fun a -> compile_expr opt_expr o_typ env contexts (FetchFull :: IncrRef :: a)
@@ -733,6 +752,7 @@ and compile_stmt stmt env contexts break continue cleanup acc =
   )
   | Assign (target, aexpr) -> compile_assignment target (optimize_expr aexpr env.var_env) env contexts acc
   | Call (ref, typ_args, args) -> ( 
+    Printf.printf "Compiling call...\n%!" ;
     let (typ_vars,params,call_f,env) = match ref with
     | Null -> raise_failure ("Call to 'null'")
     | OtherContext (cn,Access n) -> ( match lookup_context cn env.file_refs contexts with
@@ -753,14 +773,22 @@ and compile_stmt stmt env contexts break continue cleanup acc =
       | (_, Ok T_Routine(tvs,ts)) -> (tvs, ts, (fun acc -> compile_inner_reference access env contexts (RefFetch :: FetchFull :: FetchFull :: Call :: acc)), env)
       | _ -> raise_failure "Call to non-routine value"
     )
-    | _ -> raise_failure "Illegal call"
+    | _ -> raise_failure "Illegal call" (* Allow direct calls? like: ((c){ print c; })('a') *)
     in
     if List.length params != List.length args then raise_failure ("Call requires " ^ (Int.to_string (List.length params)) ^ " arguments, but was given " ^  (Int.to_string (List.length args)))
-    else if typ_vars = [] then compile_arguments (List.combine params args) env contexts (PlaceFull(C_Int (List.length params)) :: call_f acc) 
+    else if typ_vars = [] then (
+      Printf.printf "Call arguments, no resolves...\n%!" ;
+      let args = fillout_untyped_routine_parameters (List.map snd params) args in
+      compile_arguments (List.combine (List.map (fun (vm,t_opt) -> (vm,Option.get t_opt)) params) args) env contexts (PlaceFull(C_Int (List.length params)) :: call_f acc) 
+    )
     else (
+      Printf.printf "Resolving call arguments...\n%!" ;
       let typ_args = resolve_type_args typ_vars typ_args params args env contexts in
+      List.iter (fun e -> Printf.printf "arg: %s\n" (Option.value ~default:T_Null e |> type_string)) typ_args;
       match replace_generics params typ_vars typ_args with
-      | Ok typs -> compile_arguments (List.combine typs args) env contexts (PlaceFull(C_Int (List.length params)) :: call_f acc)
+      | Ok typs -> 
+        let args = fillout_untyped_routine_parameters (List.map snd typs) args in
+        compile_arguments (List.combine (List.map (fun (vm,t_opt) -> (vm, Option.get t_opt)) typs) args) env contexts (PlaceFull(C_Int (List.length params)) :: call_f acc)
       | Error m -> raise_failure (m^" i dont know")
     )
   )
@@ -834,6 +862,7 @@ let set_globalvar_typ name context_name new_typ contexts =
   ) contexts
 
 let type_globalvars globals contexts =
+  Printf.printf "Typing globals...\n" ;
   let rec aux globals contexts = match globals with
     | [] -> contexts
     | (_,name,context_name,_,vmod,Some ty,AssignDeclaration(_,typ,_,expr))::t -> (
@@ -886,6 +915,7 @@ let type_globalvars globals contexts =
 
 
 let rec compile_globalvars globvars structs contexts acc =
+  Printf.printf "Compiling globals...\n" ;
   match globvars with
   | [] -> (acc,contexts)
   | (_,_,context_name,_,_,_,dec)::t -> (
@@ -1017,4 +1047,4 @@ let compile path parse =
   )
   with 
   | Failure _ as f -> raise f
-  | _ -> raise (Failure(Some path, None, "Uncaught error"))
+  (* | _ -> raise (Failure(Some path, None, "Uncaught error")) *)

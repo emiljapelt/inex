@@ -1,5 +1,4 @@
-
-external char_int ::= (c : const char, o : int) {
+extern char_int ::= (c : const char, o : int) {
     val : int;
     if (c) 
         is ('0') val := 0;
@@ -12,11 +11,11 @@ external char_int ::= (c : const char, o : int) {
         is ('7') val := 7;
         is ('8') val := 8;
         is ('9') val := 9;
-    else halt "Could not find integer value of: ", c, '\n';
+    else halt("Could not find integer value of: ", c, '\n');
     o := val;
 }
 
-internal set_zero ::= (i: int) {
+intern set_zero ::= (i: int) {
     i := 0;
 }
 
@@ -32,19 +31,19 @@ entry main ::= () {
     set_zero(a);
     for(i ::= 0; i < |input|; i +:= 1) {
         v : int;
-        print ' ', v, '\n';
+        print(' ', v, '\n');
         char_int(input[i], v);
-        print ' ', v, '\n';
+        print(' ', v, '\n');
         a *:= 10;
         a +:= v;
-        print a, '\n';
+        print(a, '\n');
     }
 
     print(a - 1, '\n');
 
     f ::= new()[2];
 
-    lol ::= () { print 7; };
+    lol ::= () { print(7); };
 
     f[0] := lol;
 
